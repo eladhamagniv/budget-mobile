@@ -1,0 +1,123 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ─── Helper functions ──────────────────────────────────────────────────
+    function isAuth() {
+      return request.auth != null;
+    }
+    function myUsername() {
+      // 'username' is set as a custom claim by the migration script
+      return request.auth.token.username;
+    }
+    function myRole() {
+      return request.auth.token.role;
+    }
+    function isAdmin() {
+      return myRole() in ['kazin', 'samaog', 'maog'];
+    }
+    function canApproveRequests() {
+      return myRole() in [
+        'kazin', 'samaog', 'maog',
+        'kas_900', 'machat_900', 'samachat_900',
+        'klach_646', 'klach_179', 'klach_11'
+      ];
+    }
+
+    // ─── User profiles (public keys + role data) ───────────────────────────
+    // Any authenticated user can read profiles (needed to fetch public keys for E2E encryption).
+    // A user can only write their own profile.
+    match /users/{username} {
+      allow read: if isAuth();
+      allow create, update: if isAuth() && myUsername() == username;
+      allow delete: if false;
+    }
+
+    // ─── Chat messages ─────────────────────────────────────────────────────
+    // Strict participant-only access.
+    //   Read:   only toUserId or fromUserId
+    //   Create: only the sender (fromUserId must match auth'd user)
+    //           message must start unread, required fields must be present
+    //   Update: only the recipient, and only to flip read → true
+    //   Delete: never
+    match /notifications/{msgId} {
+      allow read: if isAuth() && (
+        resource.data.toUserId == myUsername() ||
+        resource.data.fromUserId == myUsername()
+      );
+      allow create: if isAuth()
+        && request.resource.data.fromUserId == myUsername()
+        && request.resource.data.read == false
+        && request.resource.data.keys().hasAll([
+             'id', 'toUserId', 'fromUserId', 'fromName',
+             'message', 'read', 'timestamp'
+           ]);
+      allow update: if isAuth()
+        && resource.data.toUserId == myUsername()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read'])
+        && request.resource.data.read == true;
+      allow delete: if false;
+    }
+
+    // ─── Budget units ──────────────────────────────────────────────────────
+    // All authenticated users can read. Only admins can write.
+    match /units/{unitId} {
+      allow read: if isAuth();
+      allow create, update: if isAuth() && isAdmin();
+      allow delete: if false;
+    }
+
+    // ─── Purchase requests ─────────────────────────────────────────────────
+    // Anyone authenticated can read and submit their own requests.
+    // Approval/rejection is restricted to roles with approval authority.
+    match /requests/{requestId} {
+      allow read: if isAuth();
+      allow create: if isAuth()
+        && request.resource.data.requestorId == myUsername();
+      allow update: if isAuth() && canApproveRequests();
+      allow delete: if false;
+    }
+
+    // ─── Work plans ────────────────────────────────────────────────────────
+    match /workPlans/{planId} {
+      allow read: if isAuth();
+      allow create, update: if isAuth();
+      allow delete: if false;
+    }
+
+    // ─── Profit reports ────────────────────────────────────────────────────
+    match /profits/{profitId} {
+      allow read: if isAuth();
+      allow create: if isAuth();
+      allow update: if isAuth() && isAdmin();
+      allow delete: if false;
+    }
+
+    // ─── Shiaim (records / targets) ────────────────────────────────────────
+    match /shiaim/{entryId} {
+      allow read: if isAuth();
+      allow create, update: if isAuth() && isAdmin();
+      allow delete: if false;
+    }
+
+    // ─── Wisutim (adjustments) ─────────────────────────────────────────────
+    match /wisutim/{entryId} {
+      allow read: if isAuth();
+      allow create, update: if isAuth() && isAdmin();
+      allow delete: if false;
+    }
+
+    // ─── Masheq (household/economy items) ──────────────────────────────────
+    match /masheq/{itemId} {
+      allow read: if isAuth();
+      allow create, update: if isAuth()
+        && myRole() in ['kazin', 'samaog', 'maog', 'machat_900', 'samachat_900'];
+      allow delete: if false;
+    }
+
+    // ─── Catch-all: deny everything not explicitly allowed ─────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

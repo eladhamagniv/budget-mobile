@@ -1,0 +1,5 @@
+.expo/
+android/local.properties
+
+# Firebase service account key — NEVER commit this
+scripts/serviceAccountKey.json

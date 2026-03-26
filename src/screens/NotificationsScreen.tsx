@@ -5,11 +5,11 @@ import {
 } from 'react-native';
 import { useNotifications } from '../context/NotificationContext';
 import { useAuth } from '../context/AuthContext';
-import { MOCK_USERS } from '../context/AuthContext';
 import { AppNotification } from '../context/NotificationContext';
+import { USERS, UserEntry } from '../config/users';
 import { T } from '../theme';
 
-type MockUser = typeof MOCK_USERS[0];
+type MockUser = UserEntry;
 
 const ROLE_LABEL: Record<string, string> = {
   kazin: 'קצין תקציבים', samaog: 'סמאו"ג', maog: 'מאו"ג',
@@ -126,7 +126,7 @@ export function NotificationsScreen() {
   const scrollRef = useRef<ScrollView>(null);
 
   const otherUsers = useMemo(
-    () => (user ? MOCK_USERS.filter(u => u.username !== user.username) : []),
+    () => (user ? USERS.filter(u => u.username !== user.username) : []),
     [user?.username],
   );
 
