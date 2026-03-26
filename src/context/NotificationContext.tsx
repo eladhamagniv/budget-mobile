@@ -86,8 +86,13 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     if (!raw.message) return raw;
     try {
       const myId = myUserIdRef.current;
-      const otherId = raw.fromUserId === myId ? raw.toUserId : raw.fromUserId;
-      const plaintext = await decryptMessage(raw.message, otherId);
+      const isSentByMe = raw.fromUserId === myId;
+      const plaintext = await decryptMessage(
+        raw.message,
+        raw.fromUserId,
+        raw.toUserId,
+        isSentByMe,
+      );
       return { ...raw, message: plaintext };
     } catch {
       return { ...raw, message: '[הודעה מוצפנת]' };
@@ -129,7 +134,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     setLastActivity(Date.now());
 
     // Encrypt for recipient, then persist to Firestore
-    encryptMessage(message, toUserId)
+    encryptMessage(message, toUserId, fromUserId)
       .then(ciphertext => {
         const firestoreDoc = { ...notif, message: ciphertext };
         return setDoc(doc(db, 'notifications', notif.id), firestoreDoc);
