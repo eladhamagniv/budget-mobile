@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+
+    <!--
+        Block all cleartext (HTTP) traffic — HTTPS only.
+        Block user-installed CA certificates — only system CAs are trusted.
+
+        This prevents the most common MITM attack: installing a rogue CA cert
+        on the device (e.g. via Burp Suite proxy) to intercept encrypted traffic.
+        Even on a device with a custom CA installed, Firebase and all API calls
+        will refuse to connect.
+    -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+            <!-- Explicitly exclude user-installed certs (default would include them) -->
+        </trust-anchors>
+    </base-config>
+
+    <!--
+        Debug builds only: allow user CAs so Charles/Proxy works during development.
+        This block is ignored in release builds.
+    -->
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </debug-overrides>
+
+</network-security-config>

@@ -1,7 +1,7 @@
 import React, { useRef, useState, useEffect, useMemo } from 'react';
 import * as Notifications from 'expo-notifications';
 import { NavigationContainer } from '@react-navigation/native';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Dimensions, Image as RNImage, I18nManager } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Dimensions, Image as RNImage, I18nManager, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Defs, ClipPath, Path, Image as SvgImage } from 'react-native-svg';
 import { useAuth } from '../context/AuthContext';
@@ -186,7 +186,11 @@ export function AppNavigator() {
     return () => sub.remove();
   }, []);
 
-  if (loading) return null;
+  if (loading) return (
+    <View style={{ flex: 1, backgroundColor: '#111827', justifyContent: 'center', alignItems: 'center' }}>
+      <ActivityIndicator size="large" color="#F59E0B" />
+    </View>
+  );
 
   if (!user) {
     return (

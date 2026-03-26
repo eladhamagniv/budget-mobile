@@ -92,12 +92,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         unitId: data.unitId,
       };
 
-      // Ensure ECDH key pair exists for this user (generates on first login)
-      await ensureKeyPair(profile.username);
-
       setUser(profile);
       saveSession(profile);
+
+      // Generate ECDH key pair in the background — non-blocking so it never fails login
+      ensureKeyPair(profile.username).catch(() => {});
     } catch (e: any) {
+      // Log actual error to help diagnose issues
+      console.error('[AuthContext] login error:', JSON.stringify(e), e?.message, e?.code);
+
       // Normalise Firebase Auth error codes to Hebrew messages
       const code: string = e?.code ?? '';
       if (
@@ -111,8 +114,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setError('יותר מדי ניסיונות. נסה שוב מאוחר יותר');
       } else if (code === 'auth/network-request-failed') {
         setError('אין חיבור לרשת');
+      } else if (code === 'permission-denied' || e?.message?.includes('permission')) {
+        setError('שגיאת הרשאות. פנה למנהל המערכת');
       } else {
-        setError('שגיאה בהתחברות. נסה שוב');
+        setError(`שגיאה: ${e?.message ?? e?.code ?? 'לא ידועה'}`);
       }
     } finally {
       setLoading(false);
