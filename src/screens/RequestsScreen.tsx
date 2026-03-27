@@ -1,8 +1,9 @@
 import React, { useState, useMemo } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity,
-  TextInput, Modal, Alert, Animated,
+  TextInput, Modal, Alert, Animated, ActivityIndicator,
 } from 'react-native';
+import { exportRequestsPdf } from '../services/exportService';
 import { useAuth } from '../context/AuthContext';
 import { useRequests } from '../context/RequestsContext';
 import { useBudget } from '../context/BudgetContext';
@@ -207,6 +208,19 @@ export function RequestsScreen() {
   const [orderId,     setOrderId]     = useState('');
   const [formError,   setFormError]   = useState('');
   const [resolving,   setResolving]   = useState<PurchaseRequest | null>(null);
+  const [exporting,   setExporting]   = useState(false);
+
+  const handleExport = async (data: PurchaseRequest[], title: string) => {
+    if (data.length === 0) { Alert.alert('אין נתונים', 'אין בקשות לייצוא'); return; }
+    setExporting(true);
+    try {
+      await exportRequestsPdf(data, title);
+    } catch {
+      Alert.alert('שגיאה', 'לא ניתן היה ליצור את הקובץ');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const myUnit = useMemo(() => units.find(u => u.id === user?.unitId), [units, user]);
   const myRequests = useMemo(() => requests.filter(r => r.unitId === user?.unitId), [requests, user]);
@@ -353,6 +367,16 @@ export function RequestsScreen() {
             ? <Text style={s.empty}>אין בקשות עדיין</Text>
             : myRequests.map((r, i) => <ReqCard key={r.id} req={r} showUnit={false} index={i} />)
           }
+          <TouchableOpacity
+            style={[s.exportBtn, exporting && s.exportBtnDisabled]}
+            onPress={() => handleExport(myRequests, 'הבקשות שלי')}
+            disabled={exporting}
+          >
+            {exporting
+              ? <ActivityIndicator size="small" color={T.bg} />
+              : <Text style={s.exportBtnText}>ייצוא PDF</Text>
+            }
+          </TouchableOpacity>
         </Animated.View>
       </ScrollView>
     );
@@ -389,6 +413,17 @@ export function RequestsScreen() {
               {done.map((r, i) => <ReqCard key={r.id} req={r} showUnit index={i} />)}
             </>
           )}
+
+          <TouchableOpacity
+            style={[s.exportBtn, exporting && s.exportBtnDisabled]}
+            onPress={() => handleExport([...pending, ...done], `דו"ח בקשות — ${myHativa}`)}
+            disabled={exporting}
+          >
+            {exporting
+              ? <ActivityIndicator size="small" color={T.bg} />
+              : <Text style={s.exportBtnText}>ייצוא PDF</Text>
+            }
+          </TouchableOpacity>
 
           {resolving && (
             <ResolveModal
@@ -438,6 +473,17 @@ export function RequestsScreen() {
                 />
               ))
           }
+
+          <TouchableOpacity
+            style={[s.exportBtn, exporting && s.exportBtnDisabled]}
+            onPress={() => handleExport(requests, 'דו"ח כל הבקשות')}
+            disabled={exporting}
+          >
+            {exporting
+              ? <ActivityIndicator size="small" color={T.bg} />
+              : <Text style={s.exportBtnText}>ייצוא PDF</Text>
+            }
+          </TouchableOpacity>
 
           {resolving && (
             <ResolveModal
@@ -492,6 +538,10 @@ const s = StyleSheet.create({
   submitBtn:  { backgroundColor: T.gold, borderRadius: T.r, paddingVertical: 13, alignItems: 'center' },
   submitBtnDisabled: { backgroundColor: T.border },
   submitBtnText: { color: T.bg, fontWeight: '800', fontSize: 14 },
+
+  exportBtn:         { backgroundColor: T.gold, borderRadius: T.r, paddingVertical: 14, alignItems: 'center', marginTop: 20, marginBottom: 8 },
+  exportBtnDisabled: { opacity: 0.5 },
+  exportBtnText:     { color: T.bg, fontWeight: '800', fontSize: 14 },
 
   reqCard:        { backgroundColor: T.surface, borderRadius: T.r2, padding: 14, borderWidth: 1, borderColor: T.border, marginBottom: 10 },
   reqCardTappable:{ borderColor: T.borderMid },

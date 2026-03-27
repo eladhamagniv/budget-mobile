@@ -3,3 +3,12 @@ android/local.properties
 
 # Firebase service account key — NEVER commit this
 scripts/serviceAccountKey.json
+functions/serviceAccountKey.json
+
+# Cloud Functions build output
+functions/lib/
+
+# Cloud Functions local env (secrets must go in Secret Manager, not here)
+functions/.env
+functions/.env.local
+functions/.secret.local
