@@ -79,17 +79,26 @@ service cloud.firestore {
     }
 
     // ─── Work plans ────────────────────────────────────────────────────────
+    // A user may only create/update plans for their own unit (via custom claim).
+    // Admins (kazin/samaog/maog) may write any plan.
     match /workPlans/{planId} {
       allow read: if isAuth();
-      allow create, update: if isAuth();
+      allow create: if isAuth() && (
+        isAdmin() ||
+        request.resource.data.unitId == request.auth.token.unitId
+      );
+      allow update: if isAuth() && (
+        isAdmin() ||
+        resource.data.unitId == request.auth.token.unitId
+      );
       allow delete: if false;
     }
 
     // ─── Profit reports ────────────────────────────────────────────────────
+    // Only admins can create or update profit reports.
     match /profits/{profitId} {
       allow read: if isAuth();
-      allow create: if isAuth();
-      allow update: if isAuth() && isAdmin();
+      allow create, update: if isAuth() && isAdmin();
       allow delete: if false;
     }
 

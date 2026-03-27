@@ -1,88 +1,239 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import * as SecureStore from 'expo-secure-store';
-import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import * as Crypto from 'expo-crypto';
+import { signInWithEmailAndPassword, signOut, updatePassword } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import { firebaseAuth, db } from '../config/firebase';
 import { ensureKeyPair } from '../services/cryptoService';
 import { UserProfile } from '../types';
 
-// Session stored in SecureStore (hardware-backed Android Keystore).
-// Value: JSON { profile: UserProfile, date: 'YYYY-MM-DD' }
-const SESSION_KEY = 'auth_session_v2';
+// ─── Storage keys ──────────────────────────────────────────────────────────────
+const SESSION_KEY    = 'auth_session_v3';   // { profile, expiry: ms timestamp }
+const DEVICE_KEY_STORE = 'device_key_v1';   // 256-bit random, permanent per device
+const LOCKOUT_KEY    = 'login_lockout_v1';  // { attempts, lockedUntil }
 
-// Email domain used to create Firebase Auth accounts for each username.
-// The migration script creates: username@idf.budget
 const AUTH_EMAIL_DOMAIN = 'idf.budget';
+const SESSION_DAYS      = 7;
+const MAX_ATTEMPTS      = 5; // failed logins before lockout kicks in
+
+// ─── Lockout schedule ─────────────────────────────────────────────────────────
+// attempts 5–9  → 5-minute lock
+// attempts 10–14 → 30-minute lock
+// attempts 15+   → 24-hour lock
+function lockDurationMs(attempts: number): number {
+  if (attempts >= 15) return 24 * 60 * 60 * 1000;
+  if (attempts >= 10) return 30 * 60 * 1000;
+  return 5 * 60 * 1000;
+}
+
+interface LockoutState {
+  attempts: number;
+  lockedUntil: number; // ms timestamp, 0 = not locked
+}
+
+async function getLockout(): Promise<LockoutState> {
+  try {
+    const raw = await SecureStore.getItemAsync(LOCKOUT_KEY);
+    return raw ? JSON.parse(raw) : { attempts: 0, lockedUntil: 0 };
+  } catch {
+    return { attempts: 0, lockedUntil: 0 };
+  }
+}
+
+async function saveLockout(state: LockoutState): Promise<void> {
+  await SecureStore.setItemAsync(LOCKOUT_KEY, JSON.stringify(state)).catch(() => {});
+}
+
+async function clearLockout(): Promise<void> {
+  await SecureStore.deleteItemAsync(LOCKOUT_KEY).catch(() => {});
+}
+
+// ─── Password derivation ───────────────────────────────────────────────────────
+
+async function getOrCreateDeviceKey(): Promise<string> {
+  const existing = await SecureStore.getItemAsync(DEVICE_KEY_STORE);
+  if (existing) return existing;
+  const bytes = await Crypto.getRandomBytesAsync(32);
+  const key = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+  await SecureStore.setItemAsync(DEVICE_KEY_STORE, key);
+  return key;
+}
+
+/**
+ * Device-bound password derivation (v3).
+ *
+ * password = 200 × SHA-256( "username:deviceKey:idf.budget.v3" : rawPassword )
+ *
+ * - deviceKey: 256-bit random, stored in Android Keystore — without the physical
+ *   device this password cannot be computed even with the correct raw password.
+ * - username salt: unique password per user even if raw passwords collide.
+ * - 200 rounds: multiplies brute-force cost by 200×.
+ * - Output: 64-char hex string (Firebase accepts up to 4096 chars).
+ */
+async function derivePasswordV3(
+  username: string,
+  rawPassword: string,
+  deviceKey: string,
+): Promise<string> {
+  const salt = `${username.toLowerCase()}:${deviceKey}:idf.budget.v3`;
+  let hash = await Crypto.digestStringAsync(
+    Crypto.CryptoDigestAlgorithm.SHA256,
+    `${salt}:${rawPassword.trim()}`,
+  );
+  for (let i = 1; i < 200; i++) {
+    hash = await Crypto.digestStringAsync(
+      Crypto.CryptoDigestAlgorithm.SHA256,
+      `${hash}:${salt}`,
+    );
+  }
+  return hash;
+}
+
+/** Legacy v1 password — used only once during self-migration on first launch. */
+function derivePasswordV1(rawPassword: string): string {
+  return '1' + rawPassword.trim();
+}
+
+// ─── Session helpers ───────────────────────────────────────────────────────────
+
+function newExpiry(): number {
+  return Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000;
+}
+
+// ─── Context types ─────────────────────────────────────────────────────────────
 
 interface AuthContextType {
   user: UserProfile | null;
   loading: boolean;
   error: string | null;
+  lockoutSeconds: number; // > 0 when login is locked out
   login: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-function todayStr() {
-  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-}
-
-function msUntilMidnight() {
-  const now = new Date();
-  const midnight = new Date(now);
-  midnight.setHours(24, 0, 0, 0);
-  return midnight.getTime() - now.getTime();
-}
+// ─── Provider ──────────────────────────────────────────────────────────────────
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<UserProfile | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [user, setUser]                   = useState<UserProfile | null>(null);
+  const [loading, setLoading]             = useState(true);
+  const [error, setError]                 = useState<string | null>(null);
+  const [expiry, setExpiry]               = useState<number | null>(null);
+  const [lockoutSeconds, setLockoutSeconds] = useState(0);
+  const lockoutTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Restore session from SecureStore on app start
+  // ── Restore session on app start ──────────────────────────────────────────
   useEffect(() => {
     SecureStore.getItemAsync(SESSION_KEY)
       .then(raw => {
         if (raw) {
-          const { profile, date } = JSON.parse(raw) as { profile: UserProfile; date: string };
-          if (date === todayStr()) setUser(profile);
-          else SecureStore.deleteItemAsync(SESSION_KEY).catch(() => {});
+          const parsed = JSON.parse(raw) as { profile: UserProfile; expiry: number };
+          if (Date.now() < parsed.expiry) {
+            setUser(parsed.profile);
+            setExpiry(parsed.expiry);
+          } else {
+            SecureStore.deleteItemAsync(SESSION_KEY).catch(() => {});
+          }
         }
         setLoading(false);
       })
       .catch(() => setLoading(false));
   }, []);
 
-  // Auto-logout at midnight
+  // ── Auto-logout when 7-day window closes (app open) ───────────────────────
   useEffect(() => {
+    if (!expiry) return;
+    const msLeft = expiry - Date.now();
+    if (msLeft <= 0) {
+      setUser(null);
+      SecureStore.deleteItemAsync(SESSION_KEY).catch(() => {});
+      return;
+    }
     const t = setTimeout(() => {
       setUser(null);
       SecureStore.deleteItemAsync(SESSION_KEY).catch(() => {});
-    }, msUntilMidnight());
+    }, msLeft);
     return () => clearTimeout(t);
+  }, [expiry]);
+
+  // ── Restore lockout countdown on app start ────────────────────────────────
+  useEffect(() => {
+    getLockout().then(({ lockedUntil }) => {
+      if (lockedUntil > Date.now()) {
+        startLockoutCountdown(lockedUntil);
+      }
+    });
+    return () => { if (lockoutTimer.current) clearInterval(lockoutTimer.current); };
   }, []);
 
-  const saveSession = (profile: UserProfile) =>
-    SecureStore.setItemAsync(SESSION_KEY, JSON.stringify({ profile, date: todayStr() })).catch(() => {});
+  function startLockoutCountdown(lockedUntil: number) {
+    if (lockoutTimer.current) clearInterval(lockoutTimer.current);
+    const tick = () => {
+      const secs = Math.max(0, Math.ceil((lockedUntil - Date.now()) / 1000));
+      setLockoutSeconds(secs);
+      if (secs === 0 && lockoutTimer.current) {
+        clearInterval(lockoutTimer.current);
+        lockoutTimer.current = null;
+      }
+    };
+    tick();
+    lockoutTimer.current = setInterval(tick, 1000);
+  }
 
-  const login = async (username: string, password: string) => {
-    setLoading(true);
+  const saveSession = (profile: UserProfile) => {
+    const exp = newExpiry();
+    setExpiry(exp);
+    return SecureStore.setItemAsync(
+      SESSION_KEY,
+      JSON.stringify({ profile, expiry: exp }),
+    ).catch(() => {});
+  };
+
+  // ─── Login ────────────────────────────────────────────────────────────────
+  const login = async (username: string, rawPassword: string) => {
     setError(null);
+
+    // ── Check lockout before even trying ──────────────────────────────────
+    const lockout = await getLockout();
+    if (lockout.lockedUntil > Date.now()) {
+      const secs = Math.ceil((lockout.lockedUntil - Date.now()) / 1000);
+      setLockoutSeconds(secs);
+      return;
+    }
+
+    setLoading(true);
     try {
-      const email = `${username.toLowerCase().trim()}@${AUTH_EMAIL_DOMAIN}`;
+      const normalUsername = username.toLowerCase().trim();
+      const email = `${normalUsername}@${AUTH_EMAIL_DOMAIN}`;
+      const existingDeviceKey = await SecureStore.getItemAsync(DEVICE_KEY_STORE);
 
-      // Firebase requires ≥6 char passwords; existing PINs are 5 digits.
-      // We prepend '1' consistently in both auth and migration — users still type their PIN.
-      const firebasePassword = '1' + password.trim();
+      if (existingDeviceKey) {
+        // ── Normal login: device key exists → v3 scheme ──────────────────
+        const firebasePassword = await derivePasswordV3(normalUsername, rawPassword, existingDeviceKey);
+        await signInWithEmailAndPassword(firebaseAuth, email, firebasePassword);
+      } else {
+        // ── First launch: self-migrate v1 → v3 ───────────────────────────
+        // Sign in with the original migration password ('1' + raw password).
+        const v1Password = derivePasswordV1(rawPassword);
+        await signInWithEmailAndPassword(firebaseAuth, email, v1Password);
 
-      // Authenticate with Firebase Auth (real credential check — server-side)
-      const credential = await signInWithEmailAndPassword(firebaseAuth, email, firebasePassword);
+        // Generate device key and upgrade Firebase password in-place.
+        const deviceKey = await getOrCreateDeviceKey();
+        const v3Password = await derivePasswordV3(normalUsername, rawPassword, deviceKey);
+        if (firebaseAuth.currentUser) {
+          await updatePassword(firebaseAuth.currentUser, v3Password);
+        }
+      }
 
-      // Fetch user profile from Firestore
+      // ── Success: clear lockout ─────────────────────────────────────────
+      await clearLockout();
+      setLockoutSeconds(0);
+      if (lockoutTimer.current) { clearInterval(lockoutTimer.current); lockoutTimer.current = null; }
+
+      // ── Fetch Firestore profile ────────────────────────────────────────
       const profileDoc = await getDoc(doc(db, 'users', username.toLowerCase().trim()));
       if (!profileDoc.exists()) throw new Error('פרופיל משתמש לא נמצא');
-
       const data = profileDoc.data();
       const profile: UserProfile = {
         id: data.username,
@@ -94,22 +245,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       setUser(profile);
       saveSession(profile);
-
-      // Generate ECDH key pair in the background — non-blocking so it never fails login
       ensureKeyPair(profile.username).catch(() => {});
-    } catch (e: any) {
-      // Log actual error to help diagnose issues
-      console.error('[AuthContext] login error:', JSON.stringify(e), e?.message, e?.code);
 
-      // Normalise Firebase Auth error codes to Hebrew messages
+    } catch (e: any) {
+      console.error('[AuthContext] login error:', e?.code, e?.message);
       const code: string = e?.code ?? '';
+
       if (
         code === 'auth/user-not-found' ||
         code === 'auth/wrong-password' ||
         code === 'auth/invalid-credential' ||
         code === 'auth/invalid-email'
       ) {
-        setError('שם משתמש או סיסמה שגויים');
+        // ── Record failed attempt and apply lockout if needed ────────────
+        const current = await getLockout();
+        const attempts = current.attempts + 1;
+        if (attempts >= MAX_ATTEMPTS) {
+          const lockedUntil = Date.now() + lockDurationMs(attempts);
+          await saveLockout({ attempts, lockedUntil });
+          startLockoutCountdown(lockedUntil);
+          const mins = Math.round(lockDurationMs(attempts) / 60000);
+          setError(`יותר מדי ניסיונות כושלים. הגישה נחסמת ל-${mins} דקות`);
+        } else {
+          await saveLockout({ attempts, lockedUntil: 0 });
+          const remaining = MAX_ATTEMPTS - attempts;
+          setError(`שם משתמש או סיסמה שגויים · נותרו ${remaining} ניסיונות`);
+        }
       } else if (code === 'auth/too-many-requests') {
         setError('יותר מדי ניסיונות. נסה שוב מאוחר יותר');
       } else if (code === 'auth/network-request-failed') {
@@ -124,17 +285,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  // ─── Logout ───────────────────────────────────────────────────────────────
   const logout = async () => {
     setUser(null);
     setError(null);
+    setExpiry(null);
     await Promise.all([
       signOut(firebaseAuth).catch(() => {}),
       SecureStore.deleteItemAsync(SESSION_KEY).catch(() => {}),
     ]);
+    // device_key_v1 is intentionally kept — it is permanent for this install.
+    // Deleting it would lock the user out (Firebase password would be uncomputable).
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, error, login, logout }}>
+    <AuthContext.Provider value={{ user, loading, error, lockoutSeconds, login, logout }}>
       {children}
     </AuthContext.Provider>
   );

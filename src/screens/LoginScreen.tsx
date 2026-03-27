@@ -9,11 +9,12 @@ import { USERS } from '../config/users';
 import { T } from '../theme';
 
 export function LoginScreen() {
-  const { login, loading, error } = useAuth();
-  const [query, setQuery]       = useState('');
-  const [selected, setSelected] = useState<{ username: string; displayName: string } | null>(null);
-  const [password, setPassword] = useState('');
-  const [showDrop, setShowDrop] = useState(false);
+  const { login, loading, error, lockoutSeconds } = useAuth();
+  const [query, setQuery]         = useState('');
+  const [selected, setSelected]   = useState<{ username: string; displayName: string } | null>(null);
+  const [password, setPassword]   = useState('');
+  const [showDrop, setShowDrop]   = useState(false);
+  const [showPass, setShowPass]   = useState(false);
 
   const headerAnim = useRef(new Animated.Value(0)).current;
   const formAnim   = useRef(new Animated.Value(0)).current;
@@ -43,10 +44,25 @@ export function LoginScreen() {
     setShowDrop(false);
   };
 
+  const isLocked = lockoutSeconds > 0;
+
   const handleLogin = () => {
+    if (isLocked) return;
     const uname = selected?.username ?? query.trim();
-    if (!uname || !password.trim()) return;
-    login(uname, password.trim());
+    if (!uname || !password) return;
+    login(uname, password);
+  };
+
+  const lockoutLabel = () => {
+    if (lockoutSeconds >= 3600) {
+      const h = Math.ceil(lockoutSeconds / 3600);
+      return `חשבון נעול ל-${h} שעות`;
+    }
+    if (lockoutSeconds >= 60) {
+      const m = Math.ceil(lockoutSeconds / 60);
+      return `חשבון נעול ל-${m} דקות`;
+    }
+    return `חשבון נעול ל-${lockoutSeconds} שניות`;
   };
 
   return (
@@ -74,6 +90,7 @@ export function LoginScreen() {
               autoCapitalize="none"
               autoCorrect={false}
               textAlign="right"
+              editable={!isLocked}
             />
             {showDrop && suggestions.length > 0 && (
               <View style={s.dropdown}>
@@ -93,34 +110,49 @@ export function LoginScreen() {
           </View>
 
           <Text style={s.label}>סיסמה</Text>
-          <TextInput
-            style={s.input}
-            value={password}
-            onChangeText={v => setPassword(v.replace(/[^0-9]/g, '').slice(0, 5))}
-            placeholder="•••••"
-            placeholderTextColor={T.textMuted}
-            secureTextEntry
-            keyboardType="number-pad"
-            maxLength={5}
-            textAlign="right"
-            onFocus={() => setShowDrop(false)}
-          />
+          <View style={s.passwordRow}>
+            <TextInput
+              style={[s.input, s.passwordInput]}
+              value={password}
+              onChangeText={setPassword}
+              placeholder="הכנס סיסמה..."
+              placeholderTextColor={T.textMuted}
+              secureTextEntry={!showPass}
+              autoCapitalize="none"
+              autoCorrect={false}
+              textAlign="right"
+              onFocus={() => setShowDrop(false)}
+              editable={!isLocked}
+            />
+            <TouchableOpacity
+              style={s.eyeBtn}
+              onPress={() => setShowPass(v => !v)}
+              activeOpacity={0.7}
+            >
+              <Text style={s.eyeIcon}>{showPass ? '🙈' : '👁'}</Text>
+            </TouchableOpacity>
+          </View>
 
-          {error ? (
+          {isLocked ? (
+            <View style={s.lockBox}>
+              <Text style={s.lockIcon}>🔒</Text>
+              <Text style={s.lockText}>{lockoutLabel()}</Text>
+            </View>
+          ) : error ? (
             <View style={s.errorBox}>
               <Text style={s.errorText}>{error}</Text>
             </View>
           ) : null}
 
           <TouchableOpacity
-            style={[s.loginBtn, loading && s.loginBtnDisabled]}
+            style={[s.loginBtn, (loading || isLocked) && s.loginBtnDisabled]}
             onPress={handleLogin}
-            disabled={loading}
+            disabled={loading || isLocked}
             activeOpacity={0.85}
           >
             {loading
               ? <ActivityIndicator color={T.bg} />
-              : <Text style={s.loginBtnText}>כניסה</Text>
+              : <Text style={s.loginBtnText}>{isLocked ? '🔒 נעול' : 'כניסה'}</Text>
             }
           </TouchableOpacity>
         </Animated.View>
@@ -131,14 +163,14 @@ export function LoginScreen() {
 }
 
 const s = StyleSheet.create({
-  flex: { flex: 1, backgroundColor: T.bg },
+  flex:      { flex: 1, backgroundColor: T.bg },
   container: { flex: 1, backgroundColor: T.bg },
-  content: { padding: T.pad, paddingBottom: 60 },
+  content:   { padding: T.pad, paddingBottom: 60 },
 
-  header: { alignItems: 'center', marginTop: 52, marginBottom: 32 },
-  title: { color: T.gold, fontSize: 32, fontWeight: '800', letterSpacing: 2 },
+  header:         { alignItems: 'center', marginTop: 52, marginBottom: 32 },
+  title:          { color: T.gold, fontSize: 32, fontWeight: '800', letterSpacing: 2 },
   titleUnderline: { width: 48, height: 2, backgroundColor: T.gold, borderRadius: 2, marginTop: 8, marginBottom: 10, opacity: 0.6 },
-  subtitle: { color: T.textMuted, fontSize: 13, letterSpacing: 0.5 },
+  subtitle:       { color: T.textMuted, fontSize: 13, letterSpacing: 0.5 },
 
   card: {
     backgroundColor: T.surface,
@@ -164,6 +196,11 @@ const s = StyleSheet.create({
     writingDirection: 'rtl',
   },
 
+  passwordRow:  { flexDirection: 'row-reverse', alignItems: 'center' },
+  passwordInput: { flex: 1, marginRight: 0 },
+  eyeBtn:       { paddingHorizontal: 10, paddingBottom: 16 },
+  eyeIcon:      { fontSize: 18 },
+
   dropdown: {
     backgroundColor: T.surface2,
     borderWidth: 1,
@@ -183,7 +220,7 @@ const s = StyleSheet.create({
     borderBottomColor: T.border,
   },
   dropName:    { color: T.text, fontSize: 14, fontWeight: '600' },
-  dropUsername:{ color: T.textMuted, fontSize: 11 },
+  dropUsername: { color: T.textMuted, fontSize: 11 },
 
   errorBox: {
     backgroundColor: T.dangerBg,
@@ -195,13 +232,21 @@ const s = StyleSheet.create({
   },
   errorText: { color: T.danger, fontSize: 13, textAlign: 'right' },
 
-  loginBtn: {
-    backgroundColor: T.gold,
+  lockBox: {
+    backgroundColor: '#1a1a2e',
+    borderWidth: 1,
+    borderColor: '#f59e0b',
     borderRadius: T.r,
-    paddingVertical: 15,
+    padding: 12,
+    marginBottom: 12,
+    flexDirection: 'row-reverse',
     alignItems: 'center',
-    marginTop: 2,
+    gap: 8,
   },
+  lockIcon: { fontSize: 18 },
+  lockText: { color: '#f59e0b', fontSize: 13, fontWeight: '700', textAlign: 'right', flex: 1 },
+
+  loginBtn:         { backgroundColor: T.gold, borderRadius: T.r, paddingVertical: 15, alignItems: 'center', marginTop: 2 },
   loginBtnDisabled: { opacity: 0.55 },
-  loginBtnText: { color: T.bg, fontSize: 16, fontWeight: '800', letterSpacing: 0.5 },
+  loginBtnText:     { color: T.bg, fontSize: 16, fontWeight: '800', letterSpacing: 0.5 },
 });
