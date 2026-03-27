@@ -8,9 +8,9 @@ import { ensureKeyPair } from '../services/cryptoService';
 import { UserProfile } from '../types';
 
 // ─── Storage keys ──────────────────────────────────────────────────────────────
-const SESSION_KEY    = 'auth_session_v3';   // { profile, expiry: ms timestamp }
-const DEVICE_KEY_STORE = 'device_key_v1';   // 256-bit random, permanent per device
-const LOCKOUT_KEY    = 'login_lockout_v1';  // { attempts, lockedUntil }
+const SESSION_KEY    = 'auth_session_v3';              // { profile, expiry: ms timestamp }
+const deviceKeyStore = (u: string) => `device_key_${u}`; // 256-bit random, per user per device
+const LOCKOUT_KEY    = 'login_lockout_v1';             // { attempts, lockedUntil }
 
 const AUTH_EMAIL_DOMAIN = 'idf.budget';
 const SESSION_DAYS      = 7;
@@ -50,12 +50,13 @@ async function clearLockout(): Promise<void> {
 
 // ─── Password derivation ───────────────────────────────────────────────────────
 
-async function getOrCreateDeviceKey(): Promise<string> {
-  const existing = await SecureStore.getItemAsync(DEVICE_KEY_STORE);
+async function getOrCreateDeviceKey(username: string): Promise<string> {
+  const storeKey = deviceKeyStore(username);
+  const existing = await SecureStore.getItemAsync(storeKey);
   if (existing) return existing;
   const bytes = await Crypto.getRandomBytesAsync(32);
   const key = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
-  await SecureStore.setItemAsync(DEVICE_KEY_STORE, key);
+  await SecureStore.setItemAsync(storeKey, key);
   return key;
 }
 
@@ -206,20 +207,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const normalUsername = username.toLowerCase().trim();
       const email = `${normalUsername}@${AUTH_EMAIL_DOMAIN}`;
-      const existingDeviceKey = await SecureStore.getItemAsync(DEVICE_KEY_STORE);
+      const existingDeviceKey = await SecureStore.getItemAsync(deviceKeyStore(normalUsername));
 
       if (existingDeviceKey) {
-        // ── Normal login: device key exists → v3 scheme ──────────────────
+        // ── Normal login: this user already has a device key → v3 scheme ──
         const firebasePassword = await derivePasswordV3(normalUsername, rawPassword, existingDeviceKey);
         await signInWithEmailAndPassword(firebaseAuth, email, firebasePassword);
       } else {
-        // ── First launch: self-migrate v1 → v3 ───────────────────────────
+        // ── First login for this user: self-migrate v1 → v3 ───────────────
         // Sign in with the original migration password ('1' + raw password).
         const v1Password = derivePasswordV1(rawPassword);
         await signInWithEmailAndPassword(firebaseAuth, email, v1Password);
 
-        // Generate device key and upgrade Firebase password in-place.
-        const deviceKey = await getOrCreateDeviceKey();
+        // Generate this user's device key and upgrade their Firebase password.
+        const deviceKey = await getOrCreateDeviceKey(normalUsername);
         const v3Password = await derivePasswordV3(normalUsername, rawPassword, deviceKey);
         if (firebaseAuth.currentUser) {
           await updatePassword(firebaseAuth.currentUser, v3Password);
@@ -294,8 +295,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signOut(firebaseAuth).catch(() => {}),
       SecureStore.deleteItemAsync(SESSION_KEY).catch(() => {}),
     ]);
-    // device_key_v1 is intentionally kept — it is permanent for this install.
-    // Deleting it would lock the user out (Firebase password would be uncomputable).
+    // device keys (device_key_${username}) are intentionally NOT deleted on logout.
+    // Each user's key is permanent for this install — deleting it would lock them out.
   };
 
   return (
