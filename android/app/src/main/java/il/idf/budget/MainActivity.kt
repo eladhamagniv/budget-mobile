@@ -2,6 +2,7 @@ package il.idf.budget
 
 import android.os.Build
 import android.os.Bundle
+import android.os.Debug
 import android.view.WindowManager
 
 import com.facebook.react.ReactActivity
@@ -18,6 +19,12 @@ class MainActivity : ReactActivity() {
     // This is required for expo-splash-screen.
     setTheme(R.style.AppTheme);
     super.onCreate(null)
+
+    // Kill immediately if a debugger is attached (anti-reverse-engineering).
+    if (Debug.isDebuggerConnected()) {
+      android.os.Process.killProcess(android.os.Process.myPid())
+      return
+    }
 
     // Prevent screenshots, screen recording, and appearance in the Recent Apps
     // thumbnail — classified military budget data must never appear in captures.

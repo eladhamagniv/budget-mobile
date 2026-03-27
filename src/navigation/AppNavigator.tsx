@@ -9,6 +9,7 @@ import { useNotifications } from '../context/NotificationContext';
 import { UserProfile } from '../types';
 import { T } from '../theme';
 import { LoginScreen } from '../screens/LoginScreen';
+import { BiometricScreen } from '../screens/BiometricScreen';
 import { DashboardScreen } from '../screens/DashboardScreen';
 import { RequestsScreen } from '../screens/RequestsScreen';
 import { MyBudgetScreen } from '../screens/MyBudgetScreen';
@@ -167,7 +168,7 @@ function SwipeNavigator({ pages, hativaIcon, hativaId, notifTrigger }: { pages: 
 }
 
 export function AppNavigator() {
-  const { user, loading } = useAuth();
+  const { user, loading, biometricUnlocked, unlockBiometric, logout } = useAuth();
   const { unreadCount, subscribeToFirestore, requestPermission } = useNotifications();
   const [notifJump, setNotifJump] = useState<number | undefined>(undefined);
 
@@ -197,6 +198,18 @@ export function AppNavigator() {
       <NavigationContainer>
         <LoginScreen />
       </NavigationContainer>
+    );
+  }
+
+  // Session is valid but biometric hasn't been verified this launch yet.
+  // This gate triggers on every cold start when there is an active session.
+  if (!biometricUnlocked) {
+    return (
+      <BiometricScreen
+        username={user.username}
+        onSuccess={unlockBiometric}
+        onFallback={logout} // biometrics unavailable → force re-login
+      />
     );
   }
 

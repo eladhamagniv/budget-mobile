@@ -14,7 +14,7 @@ import { NotificationProvider, useNotifications } from './src/context/Notificati
 import { useAuth } from './src/context/AuthContext';
 import { AppNavigator } from './src/navigation/AppNavigator';
 import { seedFirestore } from './src/services/seedFirestore';
-import { isDeviceRooted } from './src/services/securityService';
+import { isDeviceCompromised } from './src/services/securityService';
 
 function NotificationInit() {
   const { user } = useAuth();
@@ -31,7 +31,8 @@ function BlockedScreen() {
       <Text style={styles.blockedIcon}>⛔</Text>
       <Text style={styles.blockedTitle}>גישה נדחתה</Text>
       <Text style={styles.blockedBody}>
-        מכשיר זה פרוץ (rooted) ואינו עומד בדרישות האבטחה של המערכת.
+        מכשיר זה אינו עומד בדרישות האבטחה של המערכת.{'\n'}
+        (מכשיר פרוץ, כלי פריצה מותקנים, או סביבת אמולטור)
         {'\n'}לסיוע פנה למנהל המערכת.
       </Text>
     </View>
@@ -43,7 +44,7 @@ export default function App() {
 
   useEffect(() => {
     seedFirestore();
-    isDeviceRooted().then(result => setRooted(result));
+    isDeviceCompromised().then(result => setRooted(result));
   }, []);
 
   // Still checking
