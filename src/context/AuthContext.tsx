@@ -108,8 +108,6 @@ interface AuthContextType {
   loading: boolean;
   error: string | null;
   lockoutSeconds: number; // > 0 when login is locked out
-  biometricUnlocked: boolean; // true after biometric passes for this app session
-  unlockBiometric: () => void;
   login: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
 }
@@ -124,9 +122,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [error, setError]                 = useState<string | null>(null);
   const [expiry, setExpiry]               = useState<number | null>(null);
   const [lockoutSeconds, setLockoutSeconds] = useState(0);
-  // biometricUnlocked resets to false on every cold launch and every logout.
-  // The BiometricScreen sets it to true after a successful fingerprint check.
-  const [biometricUnlocked, setBiometricUnlocked] = useState(false);
   const lockoutTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ── Restore session on app start ──────────────────────────────────────────
@@ -252,9 +247,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(profile);
       saveSession(profile);
       ensureKeyPair(profile.username).catch(() => {});
-      // After successful password login, mark biometric as unlocked for this session.
-      // The user just proved identity with full credentials — biometric gate is satisfied.
-      setBiometricUnlocked(true);
 
     } catch (e: any) {
       console.error('[AuthContext] login error:', e?.code, e?.message);
@@ -294,14 +286,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const unlockBiometric = () => setBiometricUnlocked(true);
-
   // ─── Logout ───────────────────────────────────────────────────────────────
   const logout = async () => {
     setUser(null);
     setError(null);
     setExpiry(null);
-    setBiometricUnlocked(false);
     await Promise.all([
       signOut(firebaseAuth).catch(() => {}),
       SecureStore.deleteItemAsync(SESSION_KEY).catch(() => {}),
@@ -311,7 +300,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, error, lockoutSeconds, biometricUnlocked, unlockBiometric, login, logout }}>
+    <AuthContext.Provider value={{ user, loading, error, lockoutSeconds, login, logout }}>
       {children}
     </AuthContext.Provider>
   );

@@ -168,7 +168,10 @@ function SwipeNavigator({ pages, hativaIcon, hativaId, notifTrigger }: { pages: 
 }
 
 export function AppNavigator() {
-  const { user, loading, biometricUnlocked, unlockBiometric, logout } = useAuth();
+  const { user, loading, logout } = useAuth();
+  // biometricPassed resets to false on every cold start — fingerprint is required
+  // before anything else is shown, whether the session is valid or not.
+  const [biometricPassed, setBiometricPassed] = React.useState(false);
   const { unreadCount, subscribeToFirestore, requestPermission } = useNotifications();
   const [notifJump, setNotifJump] = useState<number | undefined>(undefined);
 
@@ -193,23 +196,33 @@ export function AppNavigator() {
     </View>
   );
 
+  // ── Biometric gate — always first, before checking session ──────────────
+  // Every cold start requires a fingerprint regardless of session state.
+  // Only after fingerprint passes do we decide: valid session → app, no session → login.
+  if (!biometricPassed) {
+    return (
+      <BiometricScreen
+        username={user?.username ?? ''}
+        onSuccess={() => setBiometricPassed(true)}
+        onFallback={() => {
+          // Biometrics unavailable on this device:
+          // If a session exists, force re-login for security.
+          // If no session yet, just skip the biometric gate and show login.
+          if (user) {
+            logout();
+          }
+          setBiometricPassed(true);
+        }}
+      />
+    );
+  }
+
+  // ── Biometric passed — now check session ─────────────────────────────────
   if (!user) {
     return (
       <NavigationContainer>
         <LoginScreen />
       </NavigationContainer>
-    );
-  }
-
-  // Session is valid but biometric hasn't been verified this launch yet.
-  // This gate triggers on every cold start when there is an active session.
-  if (!biometricUnlocked) {
-    return (
-      <BiometricScreen
-        username={user.username}
-        onSuccess={unlockBiometric}
-        onFallback={logout} // biometrics unavailable → force re-login
-      />
     );
   }
 
