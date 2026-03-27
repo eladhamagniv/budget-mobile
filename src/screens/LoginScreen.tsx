@@ -4,6 +4,7 @@ import {
   StyleSheet, ActivityIndicator, KeyboardAvoidingView,
   Platform, Animated, FlatList,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
 import { USERS } from '../config/users';
 import { T } from '../theme';
@@ -129,7 +130,11 @@ export function LoginScreen() {
               onPress={() => setShowPass(v => !v)}
               activeOpacity={0.7}
             >
-              <Text style={s.eyeIcon}>{showPass ? '🙈' : '👁'}</Text>
+              <Ionicons
+                name={showPass ? 'eye-off-outline' : 'eye-outline'}
+                size={20}
+                color={showPass ? T.gold : T.gold + '55'}
+              />
             </TouchableOpacity>
           </View>
 
@@ -199,7 +204,6 @@ const s = StyleSheet.create({
   passwordRow:  { flexDirection: 'row-reverse', alignItems: 'center' },
   passwordInput: { flex: 1, marginRight: 0 },
   eyeBtn:       { paddingHorizontal: 10, paddingBottom: 16 },
-  eyeIcon:      { fontSize: 18 },
 
   dropdown: {
     backgroundColor: T.surface2,
